@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Residual — a real-estate mispricing scanner</title>
+<meta name="description" content="A hedonic price model + building-permit momentum scanner that surfaces mispriced residential real estate in Cambridge, MA — built on open data."/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<style>
+:root{
+  color-scheme: light;
+  --page:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+  --grid:#e1e0d9; --baseline:#c3c2b7; --border:rgba(11,11,11,0.10);
+  --seq-250:#86b6ef; --seq-350:#5598e7; --seq-450:#2a78d6; --seq-550:#1c5cab; --seq-700:#0d366b;
+  --accent:#2a78d6; --mom:#eb6834; --good:#006300; --flag:#d03b3b;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    color-scheme: dark;
+    --page:#0d0d0d; --surface:#1a1a19; --ink:#ffffff; --ink2:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --baseline:#383835; --border:rgba(255,255,255,0.10);
+    --seq-250:#86b6ef; --seq-350:#5598e7; --seq-450:#3987e5; --seq-550:#1c5cab; --seq-700:#104281;
+    --accent:#3987e5; --mom:#d95926; --good:#0ca30c; --flag:#e66767;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.55;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1200px;margin:0 auto;padding:0 20px}
+header.top{padding:42px 0 10px}
+.brand{font-size:30px;font-weight:750;letter-spacing:-.02em}
+.brand .dot{color:var(--accent)}
+.tag{color:var(--ink2);margin:6px 0 0;max-width:760px;font-size:15.5px}
+.tag a{color:var(--accent);text-decoration:none}
+.tag a:hover{text-decoration:underline}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:22px 0 8px}
+@media(max-width:800px){.tiles{grid-template-columns:repeat(2,1fr)}}
+.tile{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+.tile b{display:block;font-size:24px;letter-spacing:-.01em}
+.tile span{font-size:12.5px;color:var(--ink2)}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:18px 0 12px}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:9px;overflow:hidden;background:var(--surface)}
+.seg button{border:0;background:transparent;color:var(--ink2);padding:8px 14px;font:inherit;font-size:14px;cursor:pointer}
+.seg button.on{background:var(--accent);color:#fff;font-weight:600}
+select,input[type=search]{font:inherit;font-size:14px;color:var(--ink);background:var(--surface);border:1px solid var(--border);border-radius:9px;padding:8px 10px}
+input[type=search]{min-width:210px}
+.hint{font-size:12.5px;color:var(--muted)}
+.grid2{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:14px;align-items:start}
+@media(max-width:960px){.grid2{grid-template-columns:1fr}}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden}
+.card h2{font-size:15px;margin:0;padding:13px 16px;border-bottom:1px solid var(--grid)}
+.card h2 small{color:var(--muted);font-weight:500}
+.tbl-scroll{max-height:560px;overflow:auto}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{position:sticky;top:0;background:var(--surface);text-align:left;color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;padding:9px 10px;border-bottom:1px solid var(--baseline);cursor:pointer;white-space:nowrap}
+th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
+td{padding:8px 10px;border-bottom:1px solid var(--grid);vertical-align:top}
+tr.row:hover td{background:color-mix(in srgb, var(--accent) 7%, transparent)}
+td .sub{color:var(--muted);font-size:12px}
+.pill{display:inline-block;min-width:44px;text-align:center;border-radius:999px;padding:2px 8px;font-size:12.5px;font-weight:650;color:#fff;font-variant-numeric:tabular-nums}
+.disc{color:var(--good);font-weight:650}
+.flagged{color:var(--flag);font-size:11.5px;font-weight:600}
+#map{height:430px}
+.leaflet-container{background:var(--page);font:inherit}
+.maplegend{padding:10px 16px;border-top:1px solid var(--grid);display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--ink2);align-items:center}
+.sw{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:5px;vertical-align:-1px}
+.streets{padding:8px 16px 16px}
+.srow{display:grid;grid-template-columns:150px 1fr 88px;gap:10px;align-items:center;padding:5px 0;font-size:13px}
+.sbar{height:12px;border-radius:0 4px 4px 0;background:var(--seq-450);min-width:2px}
+.srow .v{color:var(--ink2);font-variant-numeric:tabular-nums;text-align:right;font-size:12.5px}
+.method{margin:26px 0 12px}
+.method h2{font-size:19px;margin:0 0 10px}
+.method p{color:var(--ink2);max-width:860px;font-size:14.5px;margin:0 0 12px}
+.method b{color:var(--ink)}
+footer{border-top:1px solid var(--grid);margin-top:30px;padding:20px 0 48px;color:var(--muted);font-size:13.5px}
+footer a{color:var(--accent);text-decoration:none}
+footer a:hover{text-decoration:underline}
+.tooltip{position:fixed;z-index:1000;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.14);padding:10px 12px;font-size:12.5px;pointer-events:none;display:none;max-width:260px}
+.tooltip b{font-size:13px}
+.tooltip .r{display:flex;justify-content:space-between;gap:14px;color:var(--ink2)}
+.tooltip .r span:last-child{font-variant-numeric:tabular-nums;color:var(--ink)}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brand">Residual<span class="dot">.</span></div>
+    <p class="tag">A real-estate mispricing scanner. A hedonic price model learns what every home <i>should</i> be worth from 5,000+ real sales, then surfaces the ones trading far below model — on blocks where renovation permits are accelerating. Cambridge, MA edition, built entirely on <a href="https://data.cambridgema.gov" target="_blank" rel="noopener">open data</a>.</p>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="tiles" id="tiles"></div>
+
+  <div class="controls">
+    <div class="seg" id="viewseg">
+      <button class="on" data-v="sales">Recent sales vs. model</button>
+      <button data-v="watch">Under-assessed watchlist</button>
+    </div>
+    <select id="pclass"><option value="">All property types</option></select>
+    <input type="search" id="q" placeholder="Search address or street"/>
+    <span class="hint" id="counthint"></span>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2 id="tbltitle">Recent sales priced below model <small>· click a column to sort</small></h2>
+      <div class="tbl-scroll"><table id="tbl"></table></div>
+    </div>
+    <div>
+      <div class="card">
+        <h2>Map <small>· dots = scored properties · orange wash = permit activity, last 24 mo</small></h2>
+        <div id="map"></div>
+        <div class="maplegend" id="maplegend"></div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h2>Streets heating up <small>· permit momentum, trailing 24 mo vs. prior 24</small></h2>
+        <div class="streets" id="streets"></div>
+      </div>
+    </div>
+  </div>
+
+  <section class="method">
+    <h2>How it works — and what it honestly is</h2>
+    <p><b>1 · Fair value.</b> A gradient-boosted hedonic model (scikit-learn) is trained on Cambridge arm's-length sales since 2018 — living area, beds, baths, land, year built, condition, grade, style, zoning, assessor map sheet and more — with sale timing as a feature. On held-out sales it lands within <b id="m-ape">—</b> of the actual price at the median, and within 15% on <b id="m-w15">—</b> of homes. Every residential parcel then gets a model "fair value" as of 2026.</p>
+    <p><b>2 · Mispricing.</b> For every 2024–2026 sale, the scanner computes the residual: (fair value − sale price) / fair value. A big positive residual means the home traded below what its physical fundamentals predict — the signal a manual browse can't see.</p>
+    <p><b>3 · Momentum.</b> Renovation (addition/alteration) permits are aggregated per street: trailing 24 months vs. the prior 24. Rising permit velocity is a leading indicator of neighborhood reinvestment. The composite score blends discount (65%) and street momentum (35%).</p>
+    <p><b>Honesty notes.</b> Discounts beyond ~40% are flagged, not celebrated — in Cambridge they are almost always deed-restricted affordable units or non-arm's-length transfers, and treating them as alpha would be naive. This edition scores <i>closed</i> sales (what sold cheap vs. fundamentals) and an <i>under-assessed watchlist</i> (long-held homes whose model value runs well ahead of assessment, on heating streets — the knock-on-the-door list). A live-listings feed plugs into the same model unchanged. A model residual is a screen, not an appraisal: it can't see interior condition on sale day, deal terms, or deed restrictions.</p>
+  </section>
+</div>
+
+<footer>
+  <div class="wrap">
+    Built by <a href="https://github.com/amankrai28" target="_blank" rel="noopener">Aman Rai</a> with Claude Code · Data: <a href="https://data.cambridgema.gov/resource/eey2-rv59" target="_blank" rel="noopener">Cambridge Property Database FY2016–FY2026</a> &amp; <a href="https://data.cambridgema.gov/resource/qu2z-8suj" target="_blank" rel="noopener">Building Permits: Addition/Alteration</a> · Model: scikit-learn HistGradientBoosting · Not investment advice.
+  </div>
+</footer>
+
+<div class="tooltip" id="tt"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script id="data" type="application/json">{"remote":"./scanner_data.json"}</script>
+<script>
+let D = JSON.parse(document.getElementById('data').textContent);
+async function boot(){
+  if (D.remote) {
+    try { D = await (await fetch(D.remote)).json(); }
+    catch(e){ document.body.innerHTML = '<div style="padding:60px;font-family:system-ui">Data loading… if this persists, the dataset has not been published yet.</div>'; throw e; }
+  }
+  init(D);
+}
+function init(DD){ D = DD;
+const $ = s => document.querySelector(s);
+const fmt$ = v => '$' + v.toLocaleString('en-US');
+const fmtK = v => v >= 1e6 ? '$'+(v/1e6).toFixed(2)+'M' : '$'+Math.round(v/1e3)+'K';
+
+/* stat tiles */
+$('#tiles').innerHTML = [
+  [D.n_parcels.toLocaleString(), 'residential parcels scanned'],
+  [D.metrics.median_ape + '%', 'model median error on held-out sales'],
+  [D.n_permits_24m.toLocaleString(), 'renovation permits, last 24 mo'],
+  [D.n_sales_scored.toLocaleString(), '2024–26 sales scored vs. model'],
+].map(t=>`<div class="tile"><b>${t[0]}</b><span>${t[1]}</span></div>`).join('');
+$('#m-ape').textContent = D.metrics.median_ape + '%';
+$('#m-w15').textContent = D.metrics.within_15pct + '%';
+
+/* property class filter */
+const classes = [...new Set(D.sales.concat(D.watchlist).map(r=>r.pc))].sort();
+$('#pclass').innerHTML += classes.map(c=>`<option>${c}</option>`).join('');
+
+/* score color: sequential blue */
+const scol = s => s>=90?'var(--seq-700)':s>=80?'var(--seq-550)':s>=70?'var(--seq-450)':s>=55?'var(--seq-350)':'var(--seq-250)';
+const scolHex = s => { const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+  return s>=90?(dark?'#104281':'#0d366b'):s>=80?'#1c5cab':s>=70?(dark?'#3987e5':'#2a78d6'):s>=55?'#5598e7':'#86b6ef'; };
+
+let view='sales', sortKey='sc', sortDir=-1;
+const COLS = {
+  sales: [['a','Property',0],['sp','Sold',1],['fv','Model value',1],['disc','Discount',1],['mom','Street mom.',1],['sc','Score',1]],
+  watch: [['a','Property',0],['av','Assessed',1],['fv','Model value',1],['gap','Gap',1],['mom','Street mom.',1],['sc','Score',1]],
+};
+function rowsFor(){
+  let rows = (view==='sales'? D.sales : D.watchlist).slice();
+  const pc = $('#pclass').value, q = $('#q').value.trim().toLowerCase();
+  if(pc) rows = rows.filter(r=>r.pc===pc);
+  if(q) rows = rows.filter(r=> (r.a+' '+r.st).toLowerCase().includes(q));
+  rows.sort((x,y)=> (x[sortKey]===y[sortKey]?0:(x[sortKey]>y[sortKey]?1:-1))*sortDir );
+  return rows;
+}
+function render(){
+  const cols = COLS[view], rows = rowsFor();
+  $('#tbltitle').firstChild.textContent = view==='sales' ? 'Recent sales priced below model ' : 'Long-held homes assessed well below model ';
+  let h = '<thead><tr>' + cols.map(c=>`<th class="${c[2]?'num':''}" data-k="${c[0]}">${c[1]}${sortKey===c[0]?(sortDir<0?' ↓':' ↑'):''}</th>`).join('') + '</tr></thead><tbody>';
+  for(const r of rows.slice(0,250)){
+    const meta = `${r.sf.toLocaleString()} sf · ${r.bd}bd ${r.ba}ba${r.yb?' · '+r.yb:''} · ${r.pc}`;
+    h += `<tr class="row"><td><div>${r.a}</div><div class="sub">${meta}</div></td>`;
+    if(view==='sales'){
+      h += `<td class="num">${fmtK(r.sp)}<div class="sub">${r.sd}</div></td><td class="num">${fmtK(r.fv)}</td>`;
+      h += `<td class="num">${r.fl?`<span class="flagged">${r.disc}% ⚑ likely restricted</span>`:`<span class="disc">${r.disc}%</span>`}</td>`;
+    } else {
+      h += `<td class="num">${fmtK(r.av)}</td><td class="num">${fmtK(r.fv)}</td><td class="num"><span class="disc">${r.gap}%</span></td>`;
+    }
+    h += `<td class="num">${r.mom.toFixed(0)}</td><td class="num"><span class="pill" style="background:${scol(r.sc)}">${r.sc.toFixed(0)}</span></td></tr>`;
+  }
+  $('#tbl').innerHTML = h + '</tbody>';
+  $('#counthint').textContent = rows.length.toLocaleString() + ' properties' + (rows.length>250 ? ' · showing top 250' : '');
+  $('#tbl thead').addEventListener('click', e=>{
+    const k = e.target.closest('th')?.dataset.k; if(!k) return;
+    if(sortKey===k) sortDir*=-1; else {sortKey=k; sortDir=-1;}
+    render(); if (typeof drawDots==='function') drawDots();
+  });
+}
+$('#viewseg').addEventListener('click', e=>{
+  const b = e.target.closest('button'); if(!b) return;
+  view = b.dataset.v; sortKey='sc'; sortDir=-1;
+  document.querySelectorAll('#viewseg button').forEach(x=>x.classList.toggle('on', x===b));
+  render(); if (typeof drawDots==='function') drawDots();
+});
+$('#pclass').addEventListener('change', ()=>{render();drawDots();});
+$('#q').addEventListener('input', ()=>{render();drawDots();});
+
+/* map */
+try {
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+const map = L.map('map', {scrollWheelZoom:false, renderer:L.canvas()}).setView([42.376, -71.118], 13);
+L.tileLayer(`https://{s}.basemaps.cartocdn.com/${dark?'dark_all':'light_all'}/{z}/{x}/{y}{r}.png`,
+  {attribution:'© OpenStreetMap © CARTO', maxZoom:19}).addTo(map);
+const heatLayer = L.layerGroup().addTo(map);
+for(const [la,lo] of D.heat){
+  L.circleMarker([la,lo],{radius:5,stroke:false,fillColor:dark?'#d95926':'#eb6834',fillOpacity:0.05}).addTo(heatLayer);
+}
+const dotLayer = L.layerGroup().addTo(map);
+const tt = $('#tt');
+window.drawDots = drawDots;
+function drawDots(){
+  dotLayer.clearLayers();
+  const rows = rowsFor().filter(r=>r.lat && r.lon && !(r.fl)).slice(0,250);
+  for(const r of rows){
+    const m = L.circleMarker([r.lat,r.lon],{radius:6,weight:1.5,color:dark?'#1a1a19':'#fcfcfb',fillColor:scolHex(r.sc),fillOpacity:0.95});
+    m.on('mouseover', ev=>{
+      tt.style.display='block';
+      const main = view==='sales'
+        ? `<div class="r"><span>Sold (${r.sd})</span><span>${fmtK(r.sp)}</span></div><div class="r"><span>Model value</span><span>${fmtK(r.fv)}</span></div><div class="r"><span>Discount</span><span>${r.disc}%</span></div>`
+        : `<div class="r"><span>Assessed</span><span>${fmtK(r.av)}</span></div><div class="r"><span>Model value</span><span>${fmtK(r.fv)}</span></div><div class="r"><span>Gap</span><span>${r.gap}%</span></div>`;
+      tt.innerHTML = `<b>${r.a}</b><div class="sub" style="color:var(--muted);font-size:11.5px;margin:2px 0 6px">${r.sf.toLocaleString()} sf · ${r.bd}bd ${r.ba}ba · approx. location</div>${main}<div class="r"><span>Street momentum</span><span>${r.mom.toFixed(0)}/100</span></div><div class="r"><span>Score</span><span>${r.sc.toFixed(0)}</span></div>`;
+      tt.style.left = Math.min(ev.originalEvent.clientX+14, innerWidth-280)+'px';
+      tt.style.top = (ev.originalEvent.clientY+14)+'px';
+    });
+    m.on('mouseout', ()=> tt.style.display='none');
+    m.addTo(dotLayer);
+  }
+}
+$('#maplegend').innerHTML =
+  ['55','70','80','90'].map((s,i)=>`<span><span class="sw" style="background:${['#86b6ef','#5598e7','#2a78d6','#1c5cab','#0d366b'][i+1]}"></span>score ≥ ${s}</span>`).join('') +
+  `<span><span class="sw" style="background:var(--mom);opacity:.45"></span>permit activity</span>`;
+
+} catch(e) { console.warn('map unavailable', e); drawDots = ()=>{}; window.drawDots = drawDots; }
+/* streets bars — single series, direct-labeled */
+const maxm = Math.max(...D.streets.map(s=>s[1]));
+$('#streets').innerHTML = D.streets.map(s=>
+  `<div class="srow"><span>${s[0]}</span><div class="sbar" style="width:${(s[1]/maxm*100).toFixed(1)}%"></div><span class="v">${s[2]} vs ${s[3]} permits</span></div>`).join('');
+
+render(); if (typeof drawDots==='function') drawDots();
+}
+boot();
+</script>
+</body>
+</html>
